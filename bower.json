@@ -26,7 +26,7 @@
     "public"
   ],
   "dependencies": {
-    "d3": "~3.3.8",
-    "topojson": "~1.4.3"
+    "d3": "d3#>=3.4.11",
+    "topojson": "topojson#>=1.6.18"
   }
 }
