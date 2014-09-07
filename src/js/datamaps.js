@@ -52,6 +52,9 @@
       arcSharpness: 1,
       animationSpeed: 600
     },
+    backgroundConfig: {
+      backgroundImage: null
+    },
     pointerConfig: {
       pan: true,
       panBounds: true,
@@ -139,10 +142,11 @@
         return feature.id !== "ATA";
       });
     }
+    this.geoData = geoData;
 
     var geo = subunits.selectAll('path.datamaps-subunit').data( geoData );
 
-    geo.enter()
+    return geo.enter()
       .append('path')
       .attr('d', this.path)
       .attr('class', function(d) {
@@ -642,6 +646,50 @@ function handlePointer (layer, data, options) {
     }
   }
 
+  /** plugin to render background image */
+  function handleBackground(layer, data, options) {
+
+    var self = this,
+     svg = this.svg;
+
+    var image;
+    var layer = svg.select('g.datamaps-background');
+    if(layer.empty()){
+      layer = svg.insert('g', ':first-child');
+      layer.attr('class','datamaps-background')
+      image = layer.insert('image', ':first-child');
+      image.attr('preserveAspectRatio','xMinYMin');
+    }else{
+      image = layer.select('image');
+    }
+    var subunits = self.svg.select('g.datamaps-subunits');
+
+    function renderBackground(){
+      var size = subunits.node().getBBox();
+
+      var aspect = 0.5;
+      var diff = size.height - (size.width * aspect);
+
+      image.attr('xlink:href', options.backgroundImage)
+        .attr('y', (size.y + diff) + 'px')
+        .attr('x', size.x + 'px')
+        .attr('height', (size.width * aspect) + 'px')
+        .attr('width', size.width + 'px');
+    }
+    renderBackground();
+
+    //disable built in image dragging for firefox
+    image.on('dragstart', function(e){ d3.event.preventDefault(); })
+
+    svg.node().addEventListener("transform",function(){
+      //read translation and apply to image
+      var g = subunits.node();
+      var transform = g.getAttribute('transform');
+      layer.attr('transform',transform);
+    },false);
+    svg.node().addEventListener("topologychange", renderBackground);
+  }
+
   //stolen from underscore.js
   function defaults(obj) {
     Array.prototype.slice.call(arguments, 1).forEach(function(source) {
@@ -669,6 +717,8 @@ function handlePointer (layer, data, options) {
     this.options.projectionConfig = defaults(options.projectionConfig, defaultOptions.projectionConfig);
     this.options.bubblesConfig = defaults(options.bubblesConfig, defaultOptions.bubblesConfig);
     this.options.arcConfig = defaults(options.arcConfig, defaultOptions.arcConfig);
+    this.options.backgroundConfig = defaults(options.backgroundConfig, defaultOptions.backgroundConfig);
+    this.options.pointerConfig = defaults(options.pointerConfig, defaultOptions.pointerConfig);
 
     //add the SVG container
     if ( d3.select( this.options.element ).select('svg').length > 0 ) {
@@ -733,7 +783,7 @@ function handlePointer (layer, data, options) {
             Datamaps.prototype.updateChoropleth.call(self, data);
           });
         }
-        drawSubunits.call(self, data);
+        self.subunits = drawSubunits.call(self, data);
         handleGeographyConfig.call(self);
 
         if ( self.options.geographyConfig.popupOnHover || self.options.bubblesConfig.popupOnHover) {
@@ -744,9 +794,36 @@ function handlePointer (layer, data, options) {
         }
 
         //fire off finished callback
+        self.addPlugin('background', handleBackground);
         self.options.done(self);
       }
   };
+  // redraw current topology using new projection & options
+  Datamap.prototype.redraw = function() {
+    var self = this;
+    var options = self.options;
+    if(self.subunits){
+      var pathAndProjection = options.setProjection.apply(self, [options.element, options] );
+      self.path = pathAndProjection.path;
+      self.projection = pathAndProjection.projection;
+
+      var geo = self.subunits.data( self.geoData );
+
+      //helper function to raise event after all transitions complete
+      function endall(transition, callback) {
+        var n = 0;
+        transition
+          .each(function() { ++n; })
+          .each("end", function() { if (!--n) callback.apply(this, arguments); });
+      }
+
+      geo.transition().duration(0).attr('d', self.path).call(endall, function(){
+        var event = document.createEvent("Event");
+        event.initEvent("topologychange", true, true);
+        self.svg.node().dispatchEvent(event);
+      });
+    }
+  }
   /**************************************
                 TopoJSON
   ***************************************/
@@ -811,15 +888,14 @@ function handlePointer (layer, data, options) {
     element.on('mousemove', null);
     element.on('mousemove', function() {
       var position = d3.mouse(this);
+      //replaced code that renders a DIV with a call to template
       var transform = getSVGTransform(self.svg);
-      d3.select(self.svg[0][0].parentNode).select('.datamaps-hoverover')
-        .style('top', ((position[1] + transform.y) * transform.scale + 30) + "px")
-        .html(function() {
-          var data = JSON.parse(element.attr('data-info'));
-          //if ( !data ) return '';
-          return options.popupTemplate(d, data);
-        })
-        .style('left', ((position[0] + transform.x) * transform.scale) + "px");
+      var id = element.data()[0].id;
+      var name = element.data()[0].properties.name
+      var data = JSON.parse(element.attr('data-info'));
+      var top = ((position[1] + transform.y) * transform.scale + 30);
+      var left = ((position[0] + transform.x) * transform.scale);
+      options.popupTemplate({ id:id, name:name, data:data }, top, left);
     });
 
     d3.select(self.svg[0][0].parentNode).select('.datamaps-hoverover').style('display', 'block');
